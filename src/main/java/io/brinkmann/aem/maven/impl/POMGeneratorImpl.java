@@ -34,6 +34,8 @@ public class POMGeneratorImpl implements POMGenerator {
     private Map<String, ArtifactMapping> artifactMappings = new HashMap<String, ArtifactMapping>();
 
     private Set<Pattern> bundlesToBeIgnored = new HashSet<Pattern>();
+    
+    private Set<String> bundledDependenciesToBeIgnored = new HashSet<String>();
 
     private String dependencyOutputPrefix = "";
 
@@ -50,6 +52,9 @@ public class POMGeneratorImpl implements POMGenerator {
 
     @Property(value = {""}, unbounded = PropertyUnbounded.ARRAY, label = "List Bundles to be Ignored", description = "RegEx pattern of bundles which shall be ignored from export.")
     private static final String PROP_IGNORE_BUNDLE = "listIgnoreBundle";
+    
+    @Property(value = {""}, unbounded = PropertyUnbounded.ARRAY, label = "List dependencies provided within a bundle to be ignored", description = "Entries are in the form: <bundle-symbolic-name>:<groupId>:<artifactId>:<version>.")
+    private static final String PROP_IGNORE_BUNDLED_DEPENDENCIES = "listIgnoreBundledDependencies";
 
     @Property(value = "            ", label = "Dependency Output Prefix", description = "Spacing prefix for dependency block output")
     private static final String PROP_DEPENDENCY_OUTPUT_PREFIX = "dependencyOutputPrefix";
@@ -76,7 +81,10 @@ public class POMGeneratorImpl implements POMGenerator {
         final String[] dependencyMappingList = (String[]) properties.get(PROP_DEPENDENCY_MAPPING);
         for (String dependencyMapping : dependencyMappingList) {
             ArtifactMapping artifactMapping = ArtifactMapping.parseMappingFromOsgiConfig(dependencyMapping);
-            artifactMappings.put(artifactMapping.getBundleSymbolicName(), artifactMapping);
+            
+            if(artifactMapping != null){
+                artifactMappings.put(artifactMapping.getBundleSymbolicName(), artifactMapping);
+            }
         }
         final String[] listIgnoreBundle = (String[]) properties.get(PROP_IGNORE_BUNDLE);
         for (String ignoreBundle : listIgnoreBundle) {
@@ -86,6 +94,12 @@ public class POMGeneratorImpl implements POMGenerator {
                 LOGGER.error("Cannot parse bundle to ignore because RegEx is not valid.", ex);
             }
         }
+        
+        final String[] listIgnoreBundledDependencies = (String[]) properties.get(PROP_IGNORE_BUNDLED_DEPENDENCIES);
+        for (String ignoreBundledDependency : listIgnoreBundledDependencies) {
+            bundledDependenciesToBeIgnored.add(ignoreBundledDependency);
+        }
+        
         dependencyOutputPrefix = (String) properties.get(PROP_DEPENDENCY_OUTPUT_PREFIX);
         defaultGroupId = (String) properties.get(PROP_DEFAULT_GROUP_ID);
         defaultArtifactId = (String) properties.get(PROP_DEFAULT_ARTIFACT_ID);
@@ -181,9 +195,50 @@ public class POMGeneratorImpl implements POMGenerator {
             }
         }
 
+        filterIgnoredBundledDependencies(dependencies);
         filterDuplicateArtifacts(dependencies);
 
         return dependencies;
+    }
+    
+    /**
+     * Looks for bundled dependencies that are to be ignored and remove them
+     *
+     * @param dependenciesToBeFiltered goes through the list and applies the described filter
+     */
+    private void filterIgnoredBundledDependencies(Set<ArtifactInformation> dependenciesToBeFiltered) {
+      
+        if(this.bundledDependenciesToBeIgnored!=null && this.bundledDependenciesToBeIgnored.size()>0){
+            List<ArtifactInformation> dependenciesToBeRemoved = new ArrayList<>();
+    
+            for (ArtifactInformation dependencyToBeFiltered : dependenciesToBeFiltered) {
+                
+                String id = getIdInBundle(dependencyToBeFiltered);
+                
+                boolean removeDependency = this.bundledDependenciesToBeIgnored.contains(id);
+                
+                if (removeDependency) {
+                    dependenciesToBeRemoved.add(dependencyToBeFiltered);
+                    LOGGER.debug("Will remove dependency ["+ id +"] as it is configured in the ignore list.");
+                }
+            }
+            dependenciesToBeFiltered.removeAll(dependenciesToBeRemoved);
+            
+            for(ArtifactInformation dependencyToBeRemoved : dependenciesToBeRemoved){
+              String id = getIdInBundle(dependencyToBeRemoved);
+              ArtifactInformation dependency = new ArtifactInformation("[" + id + "] skipped due to ignore list]");
+              dependenciesToBeFiltered.add(dependency);
+            }
+        }
+    }
+
+    private String getIdInBundle(ArtifactInformation dependencyToBeFiltered) {
+        String id = dependencyToBeFiltered.getArtifactIdentifier();
+        if(dependencyToBeFiltered.getAssociatedBundle() != null){
+            id = dependencyToBeFiltered.getAssociatedBundle().getSymbolicName() + ":" + id;
+        }
+      
+        return id;
     }
 
     /**
@@ -209,6 +264,12 @@ public class POMGeneratorImpl implements POMGenerator {
             }
         }
         dependenciesToBeFiltered.removeAll(dependenciesToBeRemoved);
+        
+        for(ArtifactInformation dependencyToBeRemoved : dependenciesToBeRemoved){
+          String id = getIdInBundle(dependencyToBeRemoved);
+          ArtifactInformation dependency = new ArtifactInformation("Dependency [" + id + "] removed because there is an identical dependency with a higher version number.");
+          dependenciesToBeFiltered.add(dependency);
+        }
     }
 
 
